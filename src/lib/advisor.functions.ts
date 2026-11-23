@@ -1,12 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { AI_NOT_CONFIGURED } from "./ai-config";
 
 export const getBuildSuggestions = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
     z.object({ description: z.string().min(10).max(8000) }).parse(d),
   )
   .handler(async ({ data }) => {
-    if (!process.env["GEMINI_API_KEY"]) return { ok: false as const, error: "AI is not configured." };
+    if (!process.env["GEMINI_API_KEY"]) return { ok: false as const, error: AI_NOT_CONFIGURED };
     const { geminiStream } = await import("./gemini.server");
     const SYS =
       "You are a senior engineer and product advisor. Given a description of a build or project, give concrete, actionable improvement suggestions grouped under short markdown headings (e.g. Features, UX, Performance, Security, Code quality). Use bullet points, be specific, keep it under 400 words. Reply in the same language the user wrote in.";

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { groqStream } from "@/lib/groq.server";
+import { aiNotConfigured } from "@/lib/ai-config";
 import { freeImage } from "@/lib/free-image.server";
 import { geminiStream, geminiImage, dataUrlPart, type GContent, type GPart } from "@/lib/gemini.server";
 
@@ -44,7 +45,7 @@ export const Route = createFileRoute("/api/fly-ai")({
           prompt?: string;
           image?: string;
         } | null;
-        if (!process.env["GEMINI_API_KEY"]) return new Response("Server is not configured.", { status: 500 });
+        if (!process.env["GEMINI_API_KEY"]) return aiNotConfigured();
 
         /* ---------- image generation / editing (free Gemini) ---------- */
         if (body?.mode === "image") {

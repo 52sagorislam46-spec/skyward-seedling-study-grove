@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { groqStream } from "@/lib/groq.server";
 import { geminiStream, dataUrlPart, type GContent, type GPart } from "@/lib/gemini.server";
+import { aiNotConfigured } from "@/lib/ai-config";
 
 const SYSTEM = `তুমি "Fly Agro" — বাংলাদেশের কৃষকের বন্ধু, একজন অভিজ্ঞ কৃষিবিদ, পশু চিকিৎসক ও মৎস্য বিশেষজ্ঞ। সবসময় সহজ, আঞ্চলিক কৃষক বুঝতে পারে এমন বাংলায় উত্তর দেবে।
 ছবি দেখে নিচের কাঠামোতে উত্তর দাও (Markdown শিরোনাম ব্যবহার করবে):
@@ -36,7 +37,7 @@ export const Route = createFileRoute("/api/diagnose")({
         if (!image || !image.startsWith("data:image/")) {
           return new Response("একটি ছবি দিন।", { status: 400 });
         }
-        if (!process.env["GEMINI_API_KEY"]) return new Response("সার্ভার কনফিগারেশন সমস্যা।", { status: 500 });
+        if (!process.env["GEMINI_API_KEY"]) return aiNotConfigured();
         const imgPart = dataUrlPart(image);
         const first: GPart[] = [
           {

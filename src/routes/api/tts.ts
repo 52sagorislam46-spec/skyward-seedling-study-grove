@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { aiNotConfiguredJson } from "@/lib/ai-config";
 
 // Text → speech in the owner's cloned voice (Cartesia, key in the "Voicekey" secret).
 const VOICE_ID = "b24f41fd-00a3-4cd8-992a-a0c9f13f3ef1";
@@ -8,7 +9,7 @@ export const Route = createFileRoute("/api/tts")({
     handlers: {
       POST: async ({ request }) => {
         const key = process.env["Voicekey"];
-        if (!key) return Response.json({ error: "Voice is not configured." }, { status: 500 });
+        if (!key) return aiNotConfiguredJson();
         const body = (await request.json().catch(() => null)) as { text?: string } | null;
         const text = (body?.text ?? "")
           .replace(/\[\[(CONTACT_ADMIN|EMAIL_ADMIN)\]\]/g, "")

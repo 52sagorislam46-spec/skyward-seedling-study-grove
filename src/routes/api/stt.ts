@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { aiNotConfiguredJson } from "@/lib/ai-config";
 
 // Speech/audio file → text using free Groq Whisper (GROQ_API_KEY).
 export const Route = createFileRoute("/api/stt")({
@@ -6,7 +7,7 @@ export const Route = createFileRoute("/api/stt")({
     handlers: {
       POST: async ({ request }) => {
         const key = process.env["GROQ_API_KEY"];
-        if (!key) return Response.json({ error: "Not configured." }, { status: 500 });
+        if (!key) return aiNotConfiguredJson();
         const form = await request.formData().catch(() => null);
         const file = form?.get("file");
         if (!(file instanceof File) || !file.size) return Response.json({ error: "অডিও ফাইল দিন।" }, { status: 400 });

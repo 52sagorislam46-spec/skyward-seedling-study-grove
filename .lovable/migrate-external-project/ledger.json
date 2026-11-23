@@ -1,0 +1,104 @@
+{
+  "source": "github",
+  "repository": "https://github.com/52sagorislam46-spec/skybound-learning-grove.git",
+  "capabilities": [
+    {
+      "capability": "code",
+      "source": "GitHub repository",
+      "outcome": "Application source is restored into the current project; managed project metadata and pinned framework versions were preserved, and .env was excluded.",
+      "status": "complete",
+      "next_action": "Continue from the imported application when the user provides the next task."
+    },
+    {
+      "capability": "schema",
+      "source": "Firebase application code",
+      "outcome": "No versioned database schema or migration was found; the source uses Firebase integrations.",
+      "status": "pending",
+      "next_action": "Keep the existing data service unchanged until the user requests backend migration."
+    },
+    {
+      "capability": "records",
+      "source": "GitHub repository",
+      "outcome": "No application-record export is included.",
+      "status": "pending",
+      "next_action": "Existing Firebase records are not part of this code import."
+    },
+    {
+      "capability": "auth_identities",
+      "source": "Firebase application code",
+      "outcome": "Original sign-in code is included, but user identities are not in the repository.",
+      "status": "pending",
+      "next_action": "Do not change sign-in or migrate user identities until requested."
+    },
+    {
+      "capability": "authorization",
+      "source": "Firebase application code",
+      "outcome": "Application authorization is present in source code; deployed Firebase rules were not found in the checkout.",
+      "status": "pending",
+      "next_action": "Verify provider rules only if the user requests backend migration or access review."
+    },
+    {
+      "capability": "uploaded_file_bytes",
+      "source": "GitHub repository and asset pointers",
+      "outcome": "Logo and app icons are included. Some video assets are represented by pointers without their video bytes.",
+      "status": "pending",
+      "next_action": "Check missing video assets if the preview needs them."
+    },
+    {
+      "capability": "external_providers",
+      "source": "Firebase and AI/media integrations in source",
+      "outcome": "Existing provider integrations remain in source; provider credentials were not copied.",
+      "status": "pending",
+      "next_action": "Verify provider-powered features only if requested and their existing configuration is available."
+    },
+    {
+      "capability": "public_endpoints",
+      "source": "TanStack server routes in source",
+      "outcome": "Existing API route files are included; provider-dependent responses are not yet verified.",
+      "status": "pending",
+      "next_action": "Verify endpoints when the user asks to continue the migration."
+    },
+    {
+      "capability": "callbacks",
+      "source": "GitHub repository",
+      "outcome": "No separate third-party callback was identified in the initial inspection.",
+      "status": "pending",
+      "next_action": "Revisit if later source inspection identifies an external callback."
+    },
+    {
+      "capability": "webhooks",
+      "source": "GitHub repository",
+      "outcome": "No webhook export or deployment configuration was included.",
+      "status": "pending",
+      "next_action": "Revisit only if a source integration requires a webhook."
+    },
+    {
+      "capability": "schedules",
+      "source": "GitHub repository",
+      "outcome": "No scheduled-job deployment configuration was included.",
+      "status": "pending",
+      "next_action": "Revisit only if source behavior depends on a scheduled job."
+    },
+    {
+      "capability": "secrets",
+      "source": "GitHub repository",
+      "outcome": "No secret values were copied; the local .env file is excluded.",
+      "status": "pending",
+      "next_action": "Use Lovable's secure secret flow if provider credentials are needed later."
+    },
+    {
+      "capability": "cutover",
+      "source": "GitHub repository",
+      "outcome": "No production service or domain cutover was requested.",
+      "status": "pending",
+      "next_action": "Leave existing production destinations unchanged."
+    },
+    {
+      "capability": "verification",
+      "source": "Lovable preview",
+      "outcome": "Build and all seven test files passed. The home page shows the Fly sign-in screen; live provider sign-in and data behavior were not tested.",
+      "status": "pending",
+      "next_action": "Verify sign-in, provider-backed features, and missing media only when requested and configuration is available."
+    }
+  ]
+}

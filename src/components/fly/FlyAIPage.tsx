@@ -1,0 +1,543 @@
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { collection, getDocs, limit, query, where } from "firebase/firestore";
+import { ArrowLeft, Bot, Camera, Copy, Download, FileAudio, ImagePlus, Images, Loader2, Mail, MessageCircle, Mic, Pencil, Send, Square, Trash2, Volume2, X } from "lucide-react";
+import { saveMedia } from "./saveMedia";
+import { db } from "../../lib/firebase";
+import { fetchProfile, sendMessage } from "./chat";
+import type { UserProfile } from "./types";
+import { ImageLightbox } from "./ImageLightbox";
+import { useAuth } from "./AuthContext";
+import { aiHistoryKey, AI_WELCOME } from "./flyAiHistory";
+
+type Item =
+  | { role: "user" | "assistant"; content: string; image?: string; images?: string[] }
+  | { role: "error"; content: string };
+
+const ADMIN_EMAIL = "52sagorislam46@gmail.com";
+const ADMIN_USERNAMES = ["52sagorislam46", "52sagorislam46-spec"];
+
+async function compressImage(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; });
+  const s = Math.min(1, 2048 / Math.max(img.width, img.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * s);
+  c.height = Math.round(img.height * s);
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  URL.revokeObjectURL(url);
+  return c.toDataURL("image/jpeg", 0.92);
+}
+
+async function findAdmin(): Promise<UserProfile | null> {
+  for (const u of ADMIN_USERNAMES) {
+    const snap = await getDocs(query(collection(db, "users"), where("username", "==", u), limit(1)));
+    const d = snap.docs[0];
+    if (d) return fetchProfile(d.id);
+  }
+  const snap = await getDocs(query(collection(db, "users"), where("email", "==", ADMIN_EMAIL), limit(1)));
+  const d = snap.docs[0];
+  return d ? fetchProfile(d.id) : null;
+}
+
+export function FlyAIPage({
+  onBack,
+  onOpenChat,
+}: {
+  onBack: () => void;
+  onOpenChat: (p: UserProfile) => void;
+}) {
+  const { user } = useAuth();
+  const storeKey = aiHistoryKey(user?.uid);
+  const [items, setItems] = useState<Item[]>([{ role: "assistant", content: AI_WELCOME }]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storeKey);
+      const saved = raw ? (JSON.parse(raw) as Item[]) : null;
+      if (Array.isArray(saved) && saved.length) setItems(saved);
+    } catch { /* ignore */ }
+    setLoaded(true);
+  }, [storeKey]);
+  useEffect(() => {
+    if (!loaded || busy) return;
+    try { localStorage.setItem(storeKey, JSON.stringify(items)); }
+    catch {
+      try { localStorage.setItem(storeKey, JSON.stringify(items.map((m) => ("image" in m ? { ...m, image: undefined, images: undefined } : m)))); } catch { /* full */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, loaded]);
+  const clearChat = () => {
+    if (!window.confirm("পুরো Fly AI চ্যাট হিস্টোরি মুছে ফেলবেন?")) return;
+    localStorage.removeItem(storeKey);
+    setItems([{ role: "assistant", content: AI_WELCOME }]);
+  };
+  const [text, setText] = useState("");
+  const [imageMode, setImageMode] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [attaches, setAttaches] = useState<string[]>([]);
+  const attach = attaches[0] ?? null;
+  const setAttach = (v: string | null) => setAttaches(v ? [v] : []);
+  const [listening, setListening] = useState(false);
+  const [voiceSend, setVoiceSend] = useState(false);
+  const [menu, setMenu] = useState<number | null>(null);
+  const [toast, setToast] = useState("");
+  const [viewImg, setViewImg] = useState<string | null>(null);
+  const galRef = useRef<HTMLInputElement>(null);
+  const camRef = useRef<HTMLInputElement>(null);
+  const recRef = useRef<{ stop: () => void } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const flash = (t: string) => { setToast(t); setTimeout(() => setToast(""), 1600); };
+
+  // Voice (owner's cloned voice) for AI replies: play + download.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceCache = useRef(new Map<string, string>());
+  const [voiceBusy, setVoiceBusy] = useState<number | null>(null);
+  const [playing, setPlaying] = useState<number | null>(null);
+  const getVoice = async (content: string): Promise<string> => {
+    const hit = voiceCache.current.get(content);
+    if (hit) return hit;
+    const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: content }) });
+    if (!res.ok) {
+      const d = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(d.error ?? "ভয়েস তৈরি করা যায়নি");
+    }
+    const url = URL.createObjectURL(await res.blob());
+    voiceCache.current.set(content, url);
+    return url;
+  };
+  const speakMsg = async (i: number) => {
+    if (playing === i) { audioRef.current?.pause(); setPlaying(null); return; }
+    const m = items[i];
+    if (!m?.content || voiceBusy !== null) return;
+    setVoiceBusy(i);
+    try {
+      const url = await getVoice(m.content);
+      audioRef.current?.pause();
+      const a = new Audio(url);
+      audioRef.current = a;
+      a.onended = () => setPlaying(null);
+      setPlaying(i);
+      await a.play();
+    } catch (e) { setPlaying(null); flash(e instanceof Error ? e.message : "ভয়েস চালানো যায়নি"); }
+    finally { setVoiceBusy(null); }
+  };
+  const downloadVoice = async (i: number) => {
+    const m = items[i];
+    if (!m?.content || voiceBusy !== null) return;
+    setVoiceBusy(i);
+    try {
+      const url = await getVoice(m.content);
+      const r = await saveMedia(url, `fly-ai-voice-${Date.now()}.mp3`);
+      flash(r === "opened" ? "নতুন ট্যাবে খোলা হয়েছে" : "ভয়েস সেভ হয়েছে");
+    } catch (e) { flash(e instanceof Error ? e.message : "ডাউনলোড করা যায়নি"); }
+    finally { setVoiceBusy(null); }
+  };
+  useEffect(() => () => { audioRef.current?.pause(); voiceCache.current.forEach((u) => URL.revokeObjectURL(u)); }, []);
+
+  // Audio file → text (free Groq Whisper).
+  const audRef = useRef<HTMLInputElement>(null);
+  const [sttBusy, setSttBusy] = useState(false);
+  const onAudio = async (f?: File) => {
+    if (!f) return;
+    setSttBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f, f.name || "audio.webm");
+      const res = await fetch("/api/stt", { method: "POST", body: fd });
+      const d = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (!res.ok || !d.text) throw new Error(d.error ?? "অডিওতে কোনো কথা পাওয়া যায়নি");
+      setText((t) => (t ? t + " " : "") + d.text);
+      flash("অডিও থেকে লেখা তৈরি হয়েছে");
+    } catch (e) { flash(e instanceof Error ? e.message : "লেখা বানানো যায়নি"); }
+    finally { setSttBusy(false); }
+  };
+
+  const onPick = async (files?: FileList | File[] | null) => {
+    const list = Array.from(files ?? []).filter((f) => f.type.startsWith("image/"));
+    if (!list.length) return;
+    const room = 10 - attaches.length;
+    if (room <= 0) { flash("সর্বোচ্চ ১০টি ছবি দেওয়া যাবে"); return; }
+    if (list.length > room) flash("সর্বোচ্চ ১০টি ছবি দেওয়া যাবে");
+    try {
+      const out = await Promise.all(list.slice(0, room).map((f) => compressImage(f)));
+      setAttaches((p) => [...p, ...out].slice(0, 10));
+      setImageMode(false);
+    } catch { flash("ছবিটি খোলা যায়নি"); }
+  };
+
+  const toggleVoice = () => {
+    if (listening) { recRef.current?.stop(); return; }
+    const W = window as unknown as { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any };
+    const SR = W.SpeechRecognition ?? W.webkitSpeechRecognition;
+    if (!SR) { flash("এই ডিভাইসে ভয়েস সাপোর্ট নেই"); return; }
+    const r = new SR();
+    r.lang = /[\u0980-\u09FF]/.test(text) || navigator.language.startsWith("bn") ? "bn-BD" : "bn-BD";
+    r.interimResults = true;
+    r.continuous = false;
+    const base = text ? text + " " : "";
+    let heard = false;
+    r.onresult = (e: any) => {
+      let t = "";
+      for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+      if (t.trim()) heard = true;
+      setText(base + t);
+    };
+    r.onend = () => { setListening(false); if (heard) setVoiceSend(true); };
+    r.onerror = (ev: any) => {
+      setListening(false);
+      if (ev?.error === "no-speech") flash("কোনো কথা শোনা যায়নি, আবার বলুন");
+      else if (ev?.error !== "aborted") flash("মাইক্রোফোন চালু করা যায়নি — অনুমতি দিন");
+    };
+    recRef.current = r;
+    setListening(true);
+    try { r.start(); } catch { setListening(false); flash("মাইক্রোফোন চালু করা যায়নি"); }
+  };
+
+  const copyMsg = async (i: number) => {
+    const m = items[i];
+    try { await navigator.clipboard.writeText(m?.content ?? ""); flash("কপি হয়েছে"); } catch { flash("কপি করা যায়নি"); }
+    setMenu(null);
+  };
+  const deleteMsg = (i: number) => {
+    setItems((p) => p.filter((_, j) => j !== i));
+    setMenu(null);
+  };
+  const editMsg = (i: number) => {
+    const m = items[i];
+    if (!m || m.role !== "user") return;
+    setText(m.content);
+    if (m.images?.length) setAttaches(m.images); else if (m.image) setAttach(m.image);
+    setItems((p) => p.slice(0, i));
+    setMenu(null);
+  };
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Phone/browser back button closes Fly AI.
+  const backRef = useRef(onBack);
+  backRef.current = onBack;
+  useEffect(() => {
+    window.history.pushState({ flyAi: true }, "");
+    const onPop = () => backRef.current();
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const goBack = () => {
+    if (window.history.state?.flyAi) window.history.back();
+    else onBack();
+  };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [items]);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  useEffect(() => {
+    if (!voiceSend) return;
+    setVoiceSend(false);
+    if (text.trim() && !busy) void send();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceSend]);
+
+  const contactAdmin = async () => {
+    setAdminBusy(true);
+    try {
+      const admin = await findAdmin();
+      if (admin) onOpenChat(admin);
+      else window.location.href = `mailto:${ADMIN_EMAIL}`;
+    } catch {
+      window.location.href = `mailto:${ADMIN_EMAIL}`;
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
+  const send = async () => {
+    const imgs = attaches;
+    const img = imgs[0] ?? null;
+    const q = text.trim() || (img ? (imgs.length > 1 ? "এই ছবিগুলো বিশ্লেষণ করে বিস্তারিত বলো।" : "এই ছবিটি বিশ্লেষণ করে বিস্তারিত বলো।") : "");
+    if (!q || busy) return;
+    setText("");
+    setAttach(null);
+    setBusy(true);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const history: Item[] = [...items, img ? { role: "user" as const, content: q, image: img, ...(imgs.length > 1 ? { images: imgs } : {}) } : { role: "user" as const, content: q }];
+    setItems(history);
+    const serious = /(hack|হ্যাক|scam|প্রতারণা|টাকা (চুরি|হারিয়ে)|payment|পেমেন্ট|threat|হুমকি|blackmail|ব্ল্যাকমেইল|আত্মহত্যা|suicide|harass|হয়রানি|জরুরি|urgent|report|রিপোর্ট)/i.test(q);
+    if (user && (img || serious)) {
+      void findAdmin().then(async (admin) => {
+        if (!admin || admin.uid === user.uid) return;
+        await sendMessage(
+          user.uid,
+          admin.uid,
+          `🤖 Fly AI অ্যালার্ট (${img ? "ছবি/ডকুমেন্ট" : "জরুরি বিষয়"}):\n${q.slice(0, 1500)}`,
+          img ? { url: img, type: "image", name: "fly-ai-attachment.jpg" } : undefined,
+        );
+        flash("অ্যাডমিনকে জানানো হয়েছে");
+      }).catch(() => {});
+    }
+    try {
+      const wantsEdit =
+        !!img &&
+        /(edit|change|remove|add|make|convert|background|ইডিট|এডিট|সম্পাদনা|বদল|পরিবর্তন|মুছ|সরিয়|সরাও|যোগ কর|বানিয়ে দাও|ব্যাকগ্রাউন্ড|রং)/i.test(text);
+      if (imageMode || wantsEdit) {
+        const res = await fetch("/api/fly-ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "image", prompt: q, image: img ?? undefined }),
+          signal: ctrl.signal,
+        });
+        const data = (await res.json().catch(() => ({}))) as { image?: string; text?: string; error?: string };
+        const outImg = data.image;
+        if (!res.ok || !outImg) throw new Error(data.error ?? "Could not create the image.");
+        setItems((p) => [...p, { role: "assistant", content: data.text ?? "", image: outImg }]);
+        return;
+      }
+      const res = await fetch("/api/fly-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: history
+            .filter((m): m is Extract<Item, { role: "user" | "assistant" }> => m.role !== "error")
+            .slice(1)
+            .map((m) => (m.image && m.role === "user" ? { role: m.role, content: m.content, image: m.image, images: m.images } : { role: m.role, content: m.content })),
+        }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error((await res.text()) || "Fly AI could not answer.");
+      setItems((p) => [...p, { role: "assistant", content: "" }]);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let acc = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += dec.decode(value, { stream: true });
+        const snapshot = acc;
+        setItems((p) => {
+          const next = [...p];
+          next[next.length - 1] = { role: "assistant", content: snapshot };
+          return next;
+        });
+      }
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError") return;
+      setItems((p) => [...p, { role: "error", content: e instanceof Error ? e.message : "Something went wrong." }]);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 mx-auto w-full max-w-md flex flex-col h-[100dvh] overflow-hidden bg-[#131314] text-[#e3e3e3]">
+      <header className="flex items-center gap-3 px-4 h-14 border-b border-white/10 bg-[#131314]">
+        <button type="button" onClick={goBack} aria-label="Back" className="-ml-2 w-10 h-10 flex items-center justify-center rounded-full text-gray-300 active:bg-white/10">
+          <ArrowLeft size={22} />
+        </button>
+        <div className="w-9 h-9 rounded-full bg-gradient-to-br from-sky-500 to-indigo-500 text-white flex items-center justify-center">
+          <Bot size={20} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-white leading-tight">Fly AI</p>
+          <p className="text-xs text-gray-400">Ask anything · Create images</p>
+        </div>
+        <button onClick={clearChat} aria-label="চ্যাট মুছুন" title="চ্যাট হিস্টোরি মুছুন" className="w-9 h-9 rounded-full bg-white/5 text-gray-400 flex items-center justify-center">
+          <Trash2 size={17} />
+        </button>
+      </header>
+
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-3">
+        {items.map((m, i) => (
+          <div key={i} className={`relative flex flex-col ${m.role === "user" ? "items-end" : "items-start"}`}>
+            <div
+              // Long-press must stay free for the phone's own drag-to-select + Copy.
+              style={{ WebkitUserSelect: "text", userSelect: "text", WebkitTouchCallout: "default" } as Record<string, string>}
+              className={`select-text max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm ${
+                m.role === "user"
+                  ? "bg-[#2f3033] text-white rounded-br-md whitespace-pre-wrap"
+                  : m.role === "error"
+                    ? "bg-red-950/60 text-red-300"
+                    : "bg-transparent text-[#e3e3e3] rounded-bl-md px-1"
+              }`}
+            >
+              {m.role === "assistant" ? (
+                <>
+                  {m.image && (
+                    <button type="button" onClick={() => setViewImg(m.image!)} className="block w-full cursor-zoom-in" aria-label="ছবি বড় করে দেখুন">
+                      <img src={m.image} alt="AI generated" className="rounded-xl mb-2 w-full" />
+                    </button>
+                  )}
+                  {m.content ? (
+                    <div className="prose prose-sm prose-invert max-w-none [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-sky-400 underline break-all font-medium">
+                              {children} ↗
+                            </a>
+                          ),
+                        }}
+                      >{m.content.replace(/\[\[(CONTACT_ADMIN|EMAIL_ADMIN)\]\]/g, "")}</ReactMarkdown>
+                      {m.content.includes("[[CONTACT_ADMIN]]") && (
+                        <button type="button" onClick={() => void contactAdmin()} disabled={adminBusy}
+                          className="not-prose mt-2 flex items-center gap-1.5 px-3 py-2 rounded-full bg-sky-500 text-white text-xs font-semibold disabled:opacity-60">
+                          {adminBusy ? <Loader2 size={14} className="animate-spin" /> : <MessageCircle size={14} />} Contact admin
+                        </button>
+                      )}
+                      {m.content.includes("[[EMAIL_ADMIN]]") && (
+                        <a href={`mailto:${ADMIN_EMAIL}`}
+                          className="not-prose mt-2 inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-indigo-500 text-white text-xs font-semibold no-underline">
+                          <Mail size={14} /> অ্যাডমিনকে ইমেইল করুন
+                        </a>
+                      )}
+                    </div>
+                  ) : !m.image ? (
+                    <Loader2 size={16} className="animate-spin text-gray-400" />
+                  ) : null}
+                </>
+              ) : m.role === "user" ? (
+                <>
+                  {m.images && m.images.length > 1 ? (
+                    <div className="grid grid-cols-3 gap-1 mb-2">
+                      {m.images.map((im, k) => (
+                        <button key={k} type="button" onClick={() => setViewImg(im)} className="block cursor-zoom-in" aria-label="ছবি বড় করে দেখুন">
+                          <img src={im} alt={`Uploaded ${k + 1}`} className="rounded-lg w-full aspect-square object-cover" />
+                        </button>
+                      ))}
+                    </div>
+                  ) : m.image && (
+                    <button type="button" onClick={() => setViewImg(m.image!)} className="block w-full cursor-zoom-in" aria-label="ছবি বড় করে দেখুন">
+                      <img src={m.image} alt="Uploaded" className="rounded-xl mb-2 w-full h-auto object-contain" />
+                    </button>
+                  )}
+                  {m.content}
+                </>
+              ) : (
+                m.content
+              )}
+            </div>
+            {i > 0 && m.role !== "error" && (
+              <div className={`mt-1 flex gap-1 text-gray-500 ${menu === i ? "" : "opacity-70"}`}>
+                <button type="button" onClick={() => void copyMsg(i)} aria-label="Copy" className="p-1 hover:text-gray-200"><Copy size={14} /></button>
+                {m.role === "user" && !busy && (
+                  <button type="button" onClick={() => editMsg(i)} aria-label="Edit" className="p-1 hover:text-gray-200"><Pencil size={14} /></button>
+                )}
+                {m.role === "assistant" && m.content && !(busy && i === items.length - 1) && (
+                  <>
+                    <button type="button" onClick={() => void speakMsg(i)} aria-label="শুনুন" title="শুনুন" className={`p-1 hover:text-gray-200 ${playing === i ? "text-sky-400" : ""}`}>
+                      {voiceBusy === i ? <Loader2 size={14} className="animate-spin" /> : playing === i ? <Square size={14} /> : <Volume2 size={14} />}
+                    </button>
+                    <button type="button" onClick={() => void downloadVoice(i)} aria-label="ভয়েস ডাউনলোড" title="ভয়েস ডাউনলোড" className="p-1 hover:text-gray-200"><Download size={14} /></button>
+                  </>
+                )}
+                <button type="button" onClick={() => deleteMsg(i)} aria-label="Delete / Unsend" className="p-1 hover:text-red-600"><Trash2 size={14} /></button>
+              </div>
+            )}
+          </div>
+        ))}
+        {busy && imageMode && (
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <Loader2 size={14} className="animate-spin" /> Creating your image…
+          </div>
+        )}
+      </div>
+
+      {toast && (
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-24 px-3 py-1.5 rounded-full bg-gray-900 text-white text-xs z-20">{toast}</div>
+      )}
+      {attach && (
+        <div className="px-3 pt-2 border-t border-white/10 bg-[#131314] flex items-center gap-2">
+          <div className="flex gap-2 overflow-x-auto pt-1.5 pr-1">
+            {attaches.map((a, k) => (
+              <div key={k} className="relative shrink-0">
+                <img src={a} alt={`Attachment ${k + 1}`} className="w-16 h-16 rounded-xl object-cover" />
+                <button type="button" onClick={() => setAttaches((p) => p.filter((_, j) => j !== k))} aria-label="Remove photo" className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-900 text-white flex items-center justify-center"><X size={12} /></button>
+              </div>
+            ))}
+          </div>
+          <span className="text-xs text-gray-400 shrink-0">{attaches.length}/10</span>
+        </div>
+      )}
+      <input ref={galRef} type="file" accept="image/*" multiple hidden onChange={(e) => { void onPick(e.target.files); e.target.value = ""; }} />
+      <input ref={audRef} type="file" accept="audio/*,video/*" hidden onChange={(e) => { void onAudio(e.target.files?.[0]); e.target.value = ""; }} />
+      <input ref={camRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { void onPick(e.target.files); e.target.value = ""; }} />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send();
+        }}
+        className="flex items-end gap-2 px-3 py-2 border-t border-white/10 bg-[#131314] pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+      >
+        <button
+          type="button"
+          onClick={() => setImageMode((v) => !v)}
+          aria-label="Create image"
+          className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center ${
+            imageMode ? "bg-indigo-500 text-white" : "bg-[#1e1f20] text-gray-300"
+          }`}
+        >
+          <ImagePlus size={19} />
+        </button>
+        <button type="button" onClick={() => galRef.current?.click()} aria-label="Upload from gallery"
+          className="w-10 h-10 shrink-0 rounded-full bg-[#1e1f20] text-gray-300 flex items-center justify-center">
+          <Images size={19} />
+        </button>
+        <button type="button" onClick={() => camRef.current?.click()} aria-label="Take photo"
+          className="w-10 h-10 shrink-0 rounded-full bg-[#1e1f20] text-gray-300 flex items-center justify-center max-[380px]:hidden">
+          <Camera size={19} />
+        </button>
+        <button type="button" onClick={() => audRef.current?.click()} disabled={sttBusy} aria-label="অডিও ফাইল থেকে লেখা" title="অডিও ফাইল থেকে লেখা"
+          className="w-10 h-10 shrink-0 rounded-full bg-[#1e1f20] text-gray-300 flex items-center justify-center disabled:opacity-60">
+          {sttBusy ? <Loader2 size={18} className="animate-spin" /> : <FileAudio size={18} />}
+        </button>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          rows={1}
+          placeholder={imageMode ? "Describe the picture…" : "Ask Fly AI anything…"}
+          className="flex-1 resize-none max-h-32 rounded-3xl bg-[#1e1f20] text-[#e3e3e3] placeholder-gray-500 px-4 py-2.5 text-sm outline-none border border-white/10 focus:border-sky-500/50"
+        />
+        <button type="button" onClick={toggleVoice} aria-label="Voice"
+          className={`w-10 h-10 shrink-0 rounded-full flex items-center justify-center ${listening ? "bg-red-500 text-white animate-pulse" : "bg-[#1e1f20] text-gray-300"}`}>
+          <Mic size={18} />
+        </button>
+        {busy ? (
+          <button
+            type="button"
+            onClick={() => abortRef.current?.abort()}
+            aria-label="Stop"
+            className="w-10 h-10 shrink-0 rounded-full bg-white text-gray-900 flex items-center justify-center"
+          >
+            <Square size={16} />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!text.trim() && !attach}
+            aria-label="Send"
+            className="w-10 h-10 shrink-0 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500 text-white flex items-center justify-center disabled:opacity-40"
+          >
+            <Send size={18} />
+          </button>
+        )}
+      </form>
+      {viewImg && <ImageLightbox src={viewImg} onClose={() => setViewImg(null)} />}
+    </div>
+  );
+}
